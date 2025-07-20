@@ -12,7 +12,7 @@ client = openai.OpenAI(api_key="")  # ← Замени на свой
 scope = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
 gs_client = gspread.authorize(creds)
-spreadsheet_id = "1Ao-FgsBLHau3SDH3HfjTOlmO1q16F8EBKsU46znOHgE"
+spreadsheet_id = ""
 sheet = gs_client.open_by_key(spreadsheet_id).sheet1
 header_row = sheet.row_values(2)
 rows = sheet.get_all_records(head=2, expected_headers=header_row)
