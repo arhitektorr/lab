@@ -6,13 +6,13 @@ from google.oauth2.service_account import Credentials
 import openai
 
 # === 🔑 OpenAI ===
-client = openai.OpenAI(api_key="your-api-key")  # Используйте переменную окружения для безопасности
+client = openai.OpenAI(api_key="")
 
 # === 📊 Google Sheets ===
 scope = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
 gs_client = gspread.authorize(creds)
-spreadsheet_id = "your-spreadsheet-id"
+spreadsheet_id = "1Ao-df"
 sheet = gs_client.open_by_key(spreadsheet_id).sheet1
 header_row = sheet.row_values(2)
 rows = sheet.get_all_records(head=2, expected_headers=header_row)
@@ -23,80 +23,58 @@ app = Flask(__name__)
 # === 🔍 GPT-извлечение ключевых слов ===
 def extract_keywords_from_text(text):
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4.1",
         messages=[
             {
                 "role": "system",
                 "content": (
-                    "Ты бот лаборатории. Извлекай только конкретные названия анализов, витаминов и микроэлементов. "
-                    "Формат ответа: только список через запятую, без пояснений. Примеры:\n"
-                    "Запрос: 'Хочу проверить витамины' → 'витамин D, витамин B12, фолиевая кислота, железо'\n"
-                    "Запрос: 'Анализы на щитовидку' → 'ТТГ, Т4 свободный, Т3 свободный, антитела к ТПО'"
+                    "Ты бот лаборатории. Пользователь пишет, какие анализы хочет сдать. "
+                    "Твоя задача — вернуть список конкретных витаминов или микроэлементов, через запятую. "
+                    "Никаких общих слов: не пиши 'общий анализ крови', 'биохимия', 'печень', 'здоровье', 'чек-ап'. "
+                    "Если пользователь пишет просто 'витамины', верни список типа: 'витамин D, витамин B12, фолиевая кислота, ферритин, магний, цинк'. "
+                    "Ответ должен быть только списком ключевых слов, без объяснений и лишних слов."
                 )
             },
             {"role": "user", "content": text}
-        ],
-        temperature=0.3
+        ]
     )
     keywords = response.choices[0].message.content.strip()
     print("🧠 GPT вернул ключевые слова:", keywords)
-    return [kw.strip().lower() for kw in keywords.split(",") if kw.strip()]
+    return [kw.strip().lower() for kw in response.choices[0].message.content.split(",")]
 
-# === 🔎 Улучшенный поиск ===
+# === 🔎 Поиск по ключам ===
 def contains_exact_word(text, word):
-    pattern = r'\b' + re.escape(word) + r'(а|у|е|ом|ы|ов|ах|ам|и|я|ю|ем|ой|ий|ь)?\b'
+    pattern = r'\b' + re.escape(word) + r'(а|у|е|ом|ы|ов|ах|ам)?\b'
     return re.search(pattern, text.lower())
 
 def search_rows_by_keywords(keywords):
     matches = []
     for row in rows:
         name = str(row.get("Наименование", "")).lower()
-        description = str(row.get("Описание", "")).lower()
-        
-        for kw in keywords:
-            if contains_exact_word(name, kw) or contains_exact_word(description, kw):
-                matches.append(row)
-                break
+        if any(contains_exact_word(name, kw) for kw in keywords):
+            matches.append(row)
     return matches
 
-# === ✨ Форматирование ответа ===
-def format_analysis_response(results):
-    if not results:
-        return "❌ Анализы не найдены. Пожалуйста, уточните ваш запрос."
-    
-    response = []
-    for i, row in enumerate(results[:10], 1):  # Ограничиваем 10 результатами
-        name = row.get("Наименование", "Анализ")
-        price = row.get("Цена", "?")
-        days = row.get("Срок исп.", "?")
-        
-        response.append(
-            f"{i}️⃣ **{name}**\n"
-            f"💰 Цена — {price} руб.\n"
-            f"⏱ Срок — {days}\n"
-        )
-    
-    return "\n".join(response)
-
-# === 🌐 API Endpoint ===
+# === 🌐 API ===
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    user_message = request.json.get("text", "").strip()
+    user_message = request.json.get("text", "")
     if not user_message:
-        return jsonify({"response": "❗ Пожалуйста, укажите какие анализы вас интересуют."})
-    
-    try:
-        keywords = extract_keywords_from_text(user_message)
-        print("🔍 Ищем анализы по ключам:", ", ".join(keywords))
-        
-        results = search_rows_by_keywords(keywords)
-        response_text = format_analysis_response(results)
-        
-        return jsonify({"response": response_text})
-    
-    except Exception as e:
-        print(f"⚠️ Ошибка: {str(e)}")
-        return jsonify({"response": "🔧 Произошла ошибка. Пожалуйста, попробуйте позже."})
+        return jsonify({"response": "❗ Запрос пустой."})
+
+    keywords = extract_keywords_from_text(user_message)
+    print("🔑 Ключи GPT:", keywords)
+
+    results = search_rows_by_keywords(keywords)
+
+    if results:
+        response_lines = [
+            f"{i+1}️⃣ {row['Наименование']}\n💰 Цена — {row['Цена']} руб.\n⏱️ Срок — {row['Срок исп.']}"
+            for i, row in enumerate(results[:10])
+        ]
+        return jsonify({"response": "\n\n".join(response_lines)})
+    else:
+        return jsonify({"response": "❌ Ничего не найдено по вашему запросу."})
 
 # === ▶ Запуск ===
 if __name__ == "__main__":
