@@ -77,8 +77,10 @@ def analyze():
 
     if results:
         response_lines = [
-            f"🔬 {row['Наименование']}\n💰 {row['Цена']} руб.\n⏱ Срок: {row['Срок исп.']}"
-            for row in results[:10]
+            f"{i+1}️⃣ {row['Наименование']}\n"
+            f"💰 Цена — {row['Цена']} руб.\n"
+            f"⏱️ Срок — {row['Срок исп.']}"
+            for i, row in enumerate(results[:10])
         ]
         return jsonify({"response": "\n\n".join(response_lines)})
     else:
