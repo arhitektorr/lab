@@ -76,7 +76,7 @@ def search_rows_by_keywords(keywords):
 def analyze():
     user_message = request.json.get("text", "")
     if not user_message.strip():
-        return jsonify({"response": "❗ Запрос пустой."})
+        return "❗ Запрос пустой.", 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
     keywords = extract_keywords_from_text(user_message)
     print("🔑 Ключи GPT:", keywords)
@@ -85,12 +85,15 @@ def analyze():
 
     if results:
         response_lines = [
-            f"{row['Наименование']} — {row['Цена']} руб. ({row['Срок исп.']})"
-            for row in results[:10]
+            f"{i+1}️⃣ {row['Наименование']}\n"
+            f"💰 Цена — {row['Цена']} руб.\n"
+            f"⏱️ Срок — {row['Срок исп.']}\n"
+            for i, row in enumerate(results[:10])
         ]
-        return jsonify({"response": "\n".join(response_lines)})
+        text_response = "\n".join(response_lines)
+        return text_response, 200, {'Content-Type': 'text/plain; charset=utf-8'}
     else:
-        return jsonify({"response": "❌ Ничего не найдено по вашему запросу."})
+        return "❌ Ничего не найдено по вашему запросу.", 200, {'Content-Type': 'text/plain; charset=utf-8'}
 
 # === ▶ Запуск ===
 if __name__ == "__main__":
