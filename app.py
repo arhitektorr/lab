@@ -5,79 +5,106 @@ import gspread
 from google.oauth2.service_account import Credentials
 import openai
 
+app = Flask(__name__)
+
 # === 🔑 OpenAI ===
-client = openai.OpenAI(api_key="")  # ← Замени на свой
+client = openai.OpenAI(api_key="your-api-key")  # ← Убедитесь, что ключ правильный
 
 # === 📊 Google Sheets ===
 scope = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 creds = Credentials.from_service_account_file("credentials.json", scopes=scope)
 gs_client = gspread.authorize(creds)
-spreadsheet_id = ""
+spreadsheet_id = "your-spreadsheet-id"
 sheet = gs_client.open_by_key(spreadsheet_id).sheet1
 header_row = sheet.row_values(2)
 rows = sheet.get_all_records(head=2, expected_headers=header_row)
 
-# === ⚙️ Flask App ===
-app = Flask(__name__)
-
 # === 🔍 GPT-извлечение ключевых слов ===
 def extract_keywords_from_text(text):
-    response = client.chat.completions.create(
-        model="gpt-4.1",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Ты бот лаборатории. Пользователь пишет, какие анализы хочет сдать. "
-                    "Твоя задача — **вернуть список конкретных витаминов или микроэлементов**, через запятую. "
-                    "Никаких общих слов: не пиши 'общий анализ крови', 'биохимия', 'печень', 'здоровье', 'чек-ап'. "
-                    "Если пользователь пишет просто 'витамины', верни список типа: 'витамин D, витамин B12, фолиевая кислота, ферритин, магний, цинк'. "
-                    "Ответ должен быть только списком ключевых слов, без объяснений и лишних слов."
-                )
-            },
-            {"role": "user", "content": text}
-        ]
-    )
-    keywords = response.choices[0].message.content.strip()
-    print("🧠 GPT вернул ключевые слова:", keywords)  # 👈
-    return [kw.strip().lower() for kw in response.choices[0].message.content.split(",")]
-
-
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4",  # Используйте актуальную модель
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — медицинский поисковый ассистент. Анализируй запросы пользователей и строго выдавай только релевантные ключевые слова для поиска лабораторных анализов. Формат ответа: ключевые слова через запятую на русском языке в lowercase, без точек, без дополнительных объяснений. Если запрос не связан с медициной — отвечай 'Нет ключевых слов'."
+                },
+                {"role": "user", "content": text}
+            ],
+            temperature=0.3  # Для более предсказуемых результатов
+        )
+        
+        keywords = response.choices[0].message.content.strip()
+        print("🧠 GPT вернул ключевые слова:", keywords)
+        
+        if keywords == "Нет ключевых слов":
+            return []
+            
+        return [kw.strip().lower() for kw in keywords.split(",") if kw.strip()]
+    
+    except Exception as e:
+        print(f"❌ Ошибка при запросе к OpenAI: {str(e)}")
+        return []
 
 # === 🔎 Поиск по ключам ===
 def contains_exact_word(text, word):
+    if not text or not word:
+        return False
     pattern = r'\b' + re.escape(word) + r'(а|у|е|ом|ы|ов|ах|ам)?\b'
-    return re.search(pattern, text.lower())
+    return re.search(pattern, str(text).lower())
 
 def search_rows_by_keywords(keywords):
     matches = []
+    if not keywords:
+        return matches
+        
     for row in rows:
         name = str(row.get("Наименование", "")).lower()
-        if any(contains_exact_word(name, kw) for kw in keywords):
-            matches.append(row)
+        description = str(row.get("Описание", "")).lower()
+        
+        # Ищем совпадения в названии и описании
+        for kw in keywords:
+            if (contains_exact_word(name, kw) or 
+                contains_exact_word(description, kw)):
+                matches.append(row)
+                break
+                
     return matches
 
 # === 🌐 API ===
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    user_message = request.json.get("text", "")
-    if not user_message:
-        return jsonify({"response": "❗ Запрос пустой."})
+    try:
+        user_message = request.json.get("text", "").strip()
+        if not user_message:
+            return jsonify({"error": "Пустой запрос"}), 400
 
-    keywords = extract_keywords_from_text(user_message)
-    print("🔑 Ключи GPT:", keywords)
+        print("📩 Получен запрос:", user_message)
+        keywords = extract_keywords_from_text(user_message)
+        print("🔑 Извлеченные ключевые слова:", keywords)
 
-    results = search_rows_by_keywords(keywords)
+        if not keywords:
+            return jsonify({"response": "Не удалось определить медицинские анализы по вашему запросу"})
 
-    if results:
-        response_lines = [
-            f"{row['Наименование']} — {row['Цена']} руб. ({row['Срок исп.']})"
-            for row in results[:10]
-        ]
-        return jsonify({"response": "\n".join(response_lines)})
-    else:
-        return jsonify({"response": "❌ Ничего не найдено по вашему запросу."})
+        results = search_rows_by_keywords(keywords)
+
+        if results:
+            response_data = [
+                {
+                    "name": row.get("Наименование", ""),
+                    "price": row.get("Цена", ""),
+                    "duration": row.get("Срок исп.", "")
+                }
+                for row in results[:10]  # Ограничиваем количество результатов
+            ]
+            return jsonify({"response": response_data})
+        else:
+            return jsonify({"response": "Анализы не найдены"})
+            
+    except Exception as e:
+        print(f"⚠️ Ошибка обработки запроса: {str(e)}")
+        return jsonify({"error": "Внутренняя ошибка сервера"}), 500
 
 # === ▶ Запуск ===
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, host="0.0.0.0")
